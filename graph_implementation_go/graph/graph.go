@@ -2,18 +2,11 @@ package graph
 
 import (
 	"fmt"
-	"gonum.org/v1/gonum/graph/simple"
-	"hash/crc32"
-	"hash/crc64"
-	"log"
-	"os"
-	"time"
-
 	"github.com/Masterminds/semver"
 	"github.com/mailru/easyjson"
-	"gonum.org/v1/gonum/graph"
-	"gonum.org/v1/gonum/graph/network"
-	"gonum.org/v1/gonum/graph/traverse"
+	"gonum.org/v1/gonum/graph/simple"
+	"log"
+	"os"
 )
 
 type VersionInfo struct {
@@ -38,8 +31,6 @@ type NodeInfo struct {
 	id        int64
 }
 
-var crcTable *crc64.Table = crc64.MakeTable(crc64.ISO)
-
 // NewNodeInfo constructs a NodeInfo structure and automatically fills the stringID.
 func NewNodeInfo(id int64, name string, version string, timestamp string) *NodeInfo {
 	return &NodeInfo{
@@ -51,18 +42,6 @@ func NewNodeInfo(id int64, name string, version string, timestamp string) *NodeI
 
 func (nodeInfo NodeInfo) String() string {
 	return fmt.Sprintf("Package: %v - Version: %v", nodeInfo.Name, nodeInfo.Version)
-}
-
-func CreateHashedVersionMap(pi *[]PackageInfo) map[uint32][]string {
-	result := make(map[uint32][]string, len(*pi))
-	for _, pkg := range *pi {
-		hashedName := hashPackageName(pkg.Name)
-		result[hashedName] = make([]string, 0, len(pkg.Versions))
-		for ver := range pkg.Versions {
-			result[hashedName] = append(result[hashedName], ver)
-		}
-	}
-	return result
 }
 
 // CreateEdges takes a graph, a list of packages and their dependencies, a map of stringIDs to NodeInfo and
@@ -128,7 +107,12 @@ func ParseJSON(inPath string) []PackageInfo {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer f.Close()
+	defer func(f *os.File) {
+		err := f.Close()
+		if err != nil {
+			panic(err)
+		}
+	}(f)
 
 	var result Doc
 	err = easyjson.UnmarshalFromReader(f, &result)
@@ -158,27 +142,6 @@ func CreateMaps(packageList *[]PackageInfo, graph *DirectedGraph) (map[uint64]in
 	return hashToNodeId, idToNodeInfo
 }
 
-func hashStringId(stringID string) uint64 {
-	hashed := crc64.Checksum([]byte(stringID), crcTable)
-	return hashed
-}
-
-func hashPackageName(packageName string) uint32 {
-	hashed := crc32.ChecksumIEEE([]byte(packageName))
-	return hashed
-}
-
-func LookupVersions(packageName string, versionMap map[uint32][]string) []string {
-	hash := hashPackageName(packageName)
-	return versionMap[hash]
-}
-
-func LookupByStringId(stringId string, hashTable map[uint64]int64) int64 {
-	hash := hashStringId(stringId)
-	goId := hashTable[hash]
-	return goId
-}
-
 func CreateGraph(inputPath string, isUsingMaven bool) (*DirectedGraph, map[uint64]int64, map[int64]NodeInfo) {
 	fmt.Println("Parsing input")
 	packagesList := ParseJSON(inputPath)
@@ -197,296 +160,4 @@ func CreateGraph(inputPath string, isUsingMaven bool) (*DirectedGraph, map[uint6
 	fmt.Println("Done creating edges!")
 
 	return directedGraph, hashToNodeId, idToNodeInfo
-}
-
-// InInterval returns true when time t lies in the interval [begin, end], false otherwise
-func InInterval(t, begin, end time.Time) bool {
-	return t.Equal(begin) || t.Equal(end) || t.After(begin) && t.Before(end)
-}
-
-// initializeTraversal is a helper function used to initialize all required auxiliary data structures for the graph traversal
-func initializeTraversal(g *DirectedGraph, nodeMap map[int64]NodeInfo, withinInterval map[int64]bool, beginTime time.Time, endTime time.Time) {
-	nodes := g.Nodes()
-	for nodes.Next() { // Initialize withinInterval data structure
-		n := nodes.Node()
-		id := n.ID()
-		publishTime, err := time.Parse(time.RFC3339, nodeMap[id].Timestamp)
-		if err != nil {
-			panic(err)
-		}
-		if InInterval(publishTime, beginTime, endTime) {
-			withinInterval[id] = true
-		}
-	}
-}
-
-func removeDisconnected(g *DirectedGraph, connected []*graph.Edge) {
-	edges := g.Edges()
-	for edges.Next() {
-		edge := edges.Edge()
-		for _, disconnectedEdge := range connected { // Found that it's connected, move on
-			if edge == *disconnectedEdge {
-				break
-			} else {
-				g.RemoveEdge(edge.From().ID(), edge.To().ID())
-			}
-		}
-	}
-}
-
-// This function removes stale edges from the specified graph by doing a DFS with all packages as the root node in O(n^2)
-func traverseAndRemoveEdges(g *DirectedGraph, nodeMap map[int64]NodeInfo, withinInterval map[int64]bool) {
-	nodes := g.Nodes()
-	// This keeps track of which edges we've connected
-	connected := make([]*graph.Edge, 0, len(nodeMap)*2)
-
-	t := traverse.BreadthFirst{
-		Traverse: func(e graph.Edge) bool { // The dependent / parent node
-			fromId := e.From().ID()
-			toId := e.To().ID()
-			if withinInterval[toId] {
-
-				fromTime, err1 := time.Parse(time.RFC3339, nodeMap[fromId].Timestamp) // The dependent node's time stamp
-				toTime, err2 := time.Parse(time.RFC3339, nodeMap[toId].Timestamp)     // The dependency node's time stamp
-
-				if err1 != nil || err2 != nil {
-					panic(err1)
-				}
-
-				if fromTime.After(toTime) {
-					connected = append(connected, &e)
-				} // If the dependency was released before the parent node, add this edge to the connected nodes
-			}
-
-			return true
-		},
-	}
-
-	nodesAmount := len(nodeMap)
-
-	i := 0
-
-	for nodes.Next() {
-		n := nodes.Node()
-		if withinInterval[n.ID()] { // We'll only consider traversing this subtree if its root was within the specified time interval
-			_ = t.Walk(g, n, nil) // Continue walking this subtree until we've visited everything we're allowed to according to Traverse
-			t.Reset()             // Clean up for the next iteration
-			i++
-			fmt.Printf("\u001b[1A \u001b[2K \r") // Clear the last line
-			fmt.Printf("%d / %d subtrees walked \n", i, nodesAmount)
-
-		}
-	}
-
-	removeDisconnected(g, connected)
-
-}
-
-func filterGraph(g *DirectedGraph, nodeMap map[int64]NodeInfo, beginTime, endTime time.Time) {
-	// This stores whether the package existed in the specified time range
-	withinInterval := make(map[int64]bool, len(nodeMap))
-
-	initializeTraversal(g, nodeMap, withinInterval, beginTime, endTime) // Initialize all auxillary data structures for the traversal
-
-	traverseAndRemoveEdges(g, nodeMap, withinInterval) // Traverse the graph and remove stale edges
-}
-
-func FilterGraph(g *DirectedGraph, nodeMap map[int64]NodeInfo, beginTime, endTime time.Time) {
-	filterGraph(g, nodeMap, beginTime, endTime)
-}
-
-func findNode(hashMap map[uint64]int64, idToNodeInfo map[int64]NodeInfo, stringId string) (int64, bool) {
-	var nodeId int64
-	var correctOk bool
-	if info, ok := idToNodeInfo[LookupByStringId(stringId, hashMap)]; ok {
-		nodeId = info.id
-		correctOk = true
-	} else {
-		log.Printf("String id %s was not found \n", stringId)
-		correctOk = false
-	}
-	return nodeId, correctOk
-}
-
-func FilterNoTraversal(g *DirectedGraph, nodeMap map[int64]NodeInfo, beginTime, endTime time.Time) {
-	nodes := g.Nodes()
-
-	nodesInInterval := make(map[int64]struct{}, len(nodeMap))
-	removeIDs := make(map[int64]struct{}, len(nodeMap))
-
-	for nodes.Next() { // Find nodes that are in the correct time interval
-		n := nodes.Node()
-		id := n.ID()
-		publishTime, err := time.Parse(time.RFC3339, nodeMap[id].Timestamp)
-		if err != nil {
-			panic(err)
-		}
-		if InInterval(publishTime, beginTime, endTime) {
-			nodesInInterval[id] = struct{}{}
-		}
-	}
-
-	for id := range nodeMap {
-		if _, ok := nodesInInterval[id]; !ok { // If the node id was not on the list, kick it out
-			removeIDs[id] = struct{}{}
-		}
-	}
-
-	keepSelectedNodes(g, removeIDs)
-}
-
-func FilterLatestNoTraversal(g *DirectedGraph, nodeMap map[int64]NodeInfo) {
-	length := g.Nodes().Len() / 2
-	newestPackageVersion := make(map[uint32]NodeInfo, length)
-	keepIDs := make(map[int64]struct{}, length)
-	removeIDs := make(map[int64]struct{}, length)
-	nodes := g.Nodes()
-
-	for nodes.Next() {
-		n := nodes.Node()
-		current := nodeMap[n.ID()]
-		currentDate, err := time.Parse(time.RFC3339, nodeMap[n.ID()].Timestamp)
-		if err != nil {
-			panic(err)
-		}
-		hash := hashPackageName(current.Name)
-
-		if latest, ok := newestPackageVersion[hash]; ok {
-			latestDate, err := time.Parse(time.RFC3339, latest.Timestamp)
-			if err != nil {
-				panic(err)
-			}
-			if currentDate.After(latestDate) { // If the key exists, and current date is later than the one stored
-				newestPackageVersion[hash] = current // Set to the current package
-			} else if currentDate.Equal(latestDate) { // If the dates are somehow equal, compare version numbers
-				currentVersion, _ := semver.NewVersion(current.Version)
-				latestVersion, _ := semver.NewVersion(latest.Version)
-
-				if currentVersion.GreaterThan(latestVersion) {
-					newestPackageVersion[hash] = current
-				}
-			}
-		} else { // If the key doesn't exist yet
-			newestPackageVersion[hash] = current
-		}
-
-	}
-
-	for _, v := range newestPackageVersion {
-		keepIDs[v.id] = struct{}{}
-	}
-
-	for id := range nodeMap {
-		if _, ok := keepIDs[id]; !ok { // If the node id was not on the list, kick it out
-			removeIDs[id] = struct{}{}
-		}
-	}
-
-	keepSelectedNodes(g, removeIDs)
-
-}
-
-// GetTransitiveDependenciesNode returns the specified node and its dependencies
-func GetTransitiveDependenciesNode(g *DirectedGraph, nodeMap map[int64]NodeInfo, hashMap map[uint64]int64, stringId string) *[]NodeInfo {
-	var nodeId int64
-	result := make([]NodeInfo, 0, len(nodeMap)/2)
-	if id, ok := findNode(hashMap, nodeMap, stringId); ok {
-		nodeId = id
-	} else {
-		return &result // This function is a no-op if we don't have a correct string id
-	}
-
-	w := traverse.BreadthFirst{
-		Visit: func(n graph.Node) {
-			result = append(result, nodeMap[n.ID()])
-		},
-	}
-
-	_ = w.Walk(g, g.Node(nodeId), nil)
-	return &result
-}
-
-// GetLatestTransitiveDependenciesNode gets the latest dependencies matching the node's version constraints. If you want this within a specific time frame, use filterNode first
-func GetLatestTransitiveDependenciesNode(g *DirectedGraph, nodeMap map[int64]NodeInfo, hashMap map[uint64]int64, stringId string) *[]NodeInfo {
-	var rootNode NodeInfo
-	allDeps := GetTransitiveDependenciesNode(g, nodeMap, hashMap, stringId)
-	result := make([]NodeInfo, 0, len(*allDeps)/2)
-	if len(*allDeps) > 1 {
-		rootNode = (*allDeps)[0]
-	} else {
-		return &result // No-op if no dependencies were found for whatever reason
-	}
-
-	newestPackageVersion := make(map[uint32]NodeInfo, len(*allDeps)/2)
-
-	result = append(result, rootNode)
-
-	// This for loop does the actual filtering
-	for _, current := range *allDeps {
-
-		if current.id == rootNode.id {
-			continue
-		}
-
-		hash := hashPackageName(current.Name)
-		currentDate, err := time.Parse(time.RFC3339, current.Timestamp)
-		if err != nil {
-			continue
-		}
-		if latest, ok := newestPackageVersion[hash]; ok {
-			latestDate, err := time.Parse(time.RFC3339, latest.Timestamp)
-			if err != nil {
-				fmt.Println(err)
-				continue
-			} else if currentDate.After(latestDate) { // If the key exists, and current date is later than the one stored
-				newestPackageVersion[hash] = current // Set to the current package
-			} else if currentDate.Equal(latestDate) { // If the dates are somehow equal, compare version numbers
-				currentVersion, _ := semver.NewVersion(current.Version)
-				latestVersion, _ := semver.NewVersion(latest.Version)
-
-				if currentVersion.GreaterThan(latestVersion) {
-					newestPackageVersion[hash] = current
-				}
-			}
-		} else { // If the key doesn't exist yet
-			newestPackageVersion[hash] = current
-		}
-	}
-
-	for _, v := range newestPackageVersion { // Add all latest package versions to the result
-		result = append(result, v)
-	}
-
-	return &result
-}
-
-func keepSelectedNodes(g *DirectedGraph, removeIDs map[int64]struct{}) {
-	edges := g.Edges()
-	for edges.Next() {
-		e := edges.Edge()
-		fid := e.From().ID()
-		tid := e.To().ID()
-
-		if _, ok := removeIDs[fid]; ok {
-			g.RemoveEdge(fid, tid)
-		}
-		if _, ok := removeIDs[tid]; ok {
-			g.RemoveEdge(fid, tid)
-		}
-	}
-
-	for id := range removeIDs {
-		g.RemoveNode(id)
-	}
-}
-
-// PageRank uses the sparse page rank algorithm to find the Page ranks of all nodes
-func PageRank(graph *DirectedGraph) map[int64]float64 {
-	pr := network.PageRankSparse(graph, 0.85, 0.001)
-	return pr
-}
-
-func Betweenness(graph *DirectedGraph) map[int64]float64 {
-	betweenness := network.Betweenness(graph)
-	return betweenness
 }
