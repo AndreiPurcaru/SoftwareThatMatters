@@ -62,7 +62,6 @@ func start() {
 
 	graph, hashMap, idToNodeInfo := g.CreateGraph(path, isUsingMaven)
 
-	//"View the graph", "View the packages list", "View the packages list with versions", "View the packages list with versions and dependencies"
 	stop := false
 	for !stop {
 		operationIndex := 0
@@ -88,13 +87,11 @@ func start() {
 
 		switch operationIndex {
 		case 0:
-			fmt.Println("This should find all the packages between two timestamps")
 			nodes := findAllPackagesBetweenTwoTimestamps(idToNodeInfo)
 			for _, node := range *nodes {
 				fmt.Println(node)
 			}
 		case 1:
-			fmt.Println("This should find all the possible dependencies of a package")
 			name := generateAndRunPackageNamePrompt("Please input the package name", idToNodeInfo)
 			nodes := g.GetTransitiveDependenciesNode(graph, idToNodeInfo, hashMap, name)
 			for _, node := range *nodes {
@@ -102,103 +99,28 @@ func start() {
 			}
 
 		case 2:
-			fmt.Println("This should find all the possible dependencies of a package between two timestamps")
 			nodes := findAllDependenciesOfAPackageBetweenTwoTimestamps(graph, hashMap, idToNodeInfo)
 			for _, node := range *nodes {
 				fmt.Println(node)
 			}
 		case 3:
-			fmt.Println("This should find the latest dependencies of a package (resolve)")
 			nodes := findLatestDependenciesOfAPackage(graph, hashMap, idToNodeInfo)
 			for _, node := range *nodes {
 				fmt.Println(node)
 			}
 
 		case 4:
-			fmt.Println("This should find the latest dependencies of a package between two time stamps")
 			nodes := findLatestDependenciesOfAPackageBetweenTwoTimestamps(graph, hashMap, idToNodeInfo)
 
 			for _, node := range *nodes {
 				fmt.Println(node)
 			}
 		case 5:
-			fmt.Println("This should find the n most used packages")
-			fmt.Println("Running pagerank")
-			pr := g.PageRank(graph)
-			keys := make([]int64, 0, len(pr))
-			for k := range pr {
-				keys = append(keys, k)
-			}
-
-			sort.SliceStable(keys, func(i, j int) bool {
-				return pr[keys[i]] > pr[keys[j]]
-			})
-
-			count := generateAndRunNumberPrompt("Please select the number (n > 0) of highest-ranked packages you wish to see")
-			for i := 0; i < count; i++ {
-				fmt.Printf("The %d-th highest-ranked node (%v) has rank %f \n", i, idToNodeInfo[keys[i]], pr[keys[i]])
-			}
+			findMostUsedPackages(graph, idToNodeInfo, false)
 		case 6:
-			fmt.Println("This should find the n most used packages between two time stamps")
-			beginTime := generateAndRunDatePrompt("Please input the beginning date of the interval (DD-MM-YYYY)")
-			endTime := generateAndRunDatePrompt("Please input the end date of the interval (DD-MM-YYYY)")
-			fmt.Println("Getting the latest dependencies for packages. This will take a while")
-			t1 := time.Now().Unix()
-			g.FilterNoTraversal(graph, idToNodeInfo, beginTime, endTime)
-			t2 := time.Now().Unix()
-			fmt.Printf("Graph filtering took %d seconds", t2-t1)
-			fmt.Println()
-			fmt.Println("Running PageRank")
-			pr := g.PageRank(graph)
-			keys := make([]int64, 0, len(pr))
-			aggregated := make(map[string]float64)
-
-			for k, value := range pr {
-				keys = append(keys, k)
-				aggregated[idToNodeInfo[k].Name] += value
-			}
-
-			aggregatedKeys := make([]string, 0, len(aggregated))
-
-			for k := range aggregated {
-				aggregatedKeys = append(aggregatedKeys, k)
-			}
-
-			sort.SliceStable(aggregatedKeys, func(i, j int) bool {
-				return aggregated[aggregatedKeys[i]] > aggregated[aggregatedKeys[j]]
-			})
-
-			sort.SliceStable(keys, func(i, j int) bool {
-				return pr[keys[i]] > pr[keys[j]]
-			})
-
-			count := generateAndRunNumberPrompt("Please select the number (n > 0) of highest-ranked packages you wish to see")
-			for i := 0; i < count; i++ {
-				fmt.Printf("The %d-th highest-ranked node (%v) has rank %f \n", i, idToNodeInfo[keys[i]], pr[keys[i]])
-			}
-
-			fmt.Print("\n---------------------------------------------\n\n")
-			for i := 0; i < count; i++ {
-				fmt.Printf("The %d-th highest-ranked package (%v) has rank %f \n", i, aggregatedKeys[i], aggregated[aggregatedKeys[i]])
-			}
-
+			findMostUsedPackages(graph, idToNodeInfo, true)
 		case 7:
-			fmt.Println("This should find the n most used packages")
-			fmt.Println("Running betweenness algorithm")
-			betweenness := g.Betweenness(graph)
-			keys := make([]int64, 0, len(betweenness))
-			for k := range betweenness {
-				keys = append(keys, k)
-			}
-
-			sort.SliceStable(keys, func(i, j int) bool {
-				return betweenness[keys[i]] > betweenness[keys[j]]
-			})
-
-			count := generateAndRunNumberPrompt("Please select the number (n > 0) of highest-ranked packages you wish to see")
-			for i := 0; i < count; i++ {
-				fmt.Printf("The %d-th highest-ranked node (%v) has a betweenness score of %f \n", i, idToNodeInfo[keys[i]], betweenness[keys[i]])
-			}
+			findMostUsedPackagesUsingBetweenness(graph, idToNodeInfo)
 		case 8:
 			fmt.Println("Stopping the program...")
 			stop = true
@@ -206,6 +128,53 @@ func start() {
 
 	}
 
+}
+
+func findMostUsedPackages(graph *g.DirectedGraph, idToNodeInfo map[int64]g.NodeInfo, betweenTimestamps bool) {
+	if betweenTimestamps {
+		beginTime := generateAndRunDatePrompt("Please input the beginning date of the interval (DD-MM-YYYY)")
+		endTime := generateAndRunDatePrompt("Please input the end date of the interval (DD-MM-YYYY)")
+		fmt.Println("Getting the latest dependencies for packages. This will take a while")
+		t1 := time.Now().Unix()
+		g.FilterNoTraversal(graph, idToNodeInfo, beginTime, endTime)
+		t2 := time.Now().Unix()
+		fmt.Printf("Graph filtering took %d seconds\n", t2-t1)
+	}
+
+	fmt.Println("Running PageRank")
+	pr := g.PageRank(graph)
+	keys := make([]int64, 0, len(pr))
+	aggregated := make(map[string]float64)
+
+	for k, value := range pr {
+		keys = append(keys, k)
+		aggregated[idToNodeInfo[k].Name] += value
+	}
+
+	aggregatedKeys := make([]string, 0, len(aggregated))
+
+	for k := range aggregated {
+		aggregatedKeys = append(aggregatedKeys, k)
+	}
+
+	sort.SliceStable(aggregatedKeys, func(i, j int) bool {
+		return aggregated[aggregatedKeys[i]] > aggregated[aggregatedKeys[j]]
+	})
+
+	sort.SliceStable(keys, func(i, j int) bool {
+		return pr[keys[i]] > pr[keys[j]]
+	})
+
+	count := generateAndRunNumberPrompt("Please select the number (n > 0) of highest-ranked packages you wish to see")
+	for i := 0; i < count; i++ {
+		fmt.Printf("The %d-th highest-ranked node (%v) has rank %f \n", i, idToNodeInfo[keys[i]], pr[keys[i]])
+	}
+
+	fmt.Print("\n---------------------------------------------\n\n")
+
+	for i := 0; i < count; i++ {
+		fmt.Printf("The %d-th highest-ranked package (%v) has rank %f \n", i, aggregatedKeys[i], aggregated[aggregatedKeys[i]])
+	}
 }
 
 // getJSONFilesFromDataFolder returns a slice of strings with the names of the JSON files in the data folder. It can
@@ -216,7 +185,12 @@ func getJSONFilesFromDataFolder() *[]string {
 	if err != nil {
 		panic(err)
 	}
-	defer dir.Close()
+	defer func(dir *os.File) {
+		err := dir.Close()
+		if err != nil {
+			panic(err)
+		}
+	}(dir)
 	files, err := dir.Readdir(-1)
 	if err != nil {
 		panic(err)
@@ -238,7 +212,6 @@ func findAllPackagesBetweenTwoTimestamps(idToNodeInfo map[int64]g.NodeInfo) *[]g
 	var nodesInInterval []g.NodeInfo
 
 	for _, node := range idToNodeInfo {
-		//TODO: We need a way of properly parsing multiple times
 		nodeTime, err := time.Parse(time.RFC3339, node.Timestamp)
 		if err != nil {
 			fmt.Println("There was an error parsing the timestamps in the nodes!")
@@ -257,7 +230,7 @@ func findAllDependenciesOfAPackageBetweenTwoTimestamps(graph *g.DirectedGraph, h
 	beginTime := generateAndRunDatePrompt("Please input the beginning date of the interval (DD-MM-YYYY)")
 	endTime := generateAndRunDatePrompt("Please input the end date of the interval (DD-MM-YYYY)")
 	nodeStringId := generateAndRunPackageNamePrompt("Please select the name and the version of the package", nodeMap)
-	g.FilterGraph(graph, nodeMap, beginTime, endTime)
+	g.FilterNoTraversal(graph, nodeMap, beginTime, endTime)
 	return g.GetTransitiveDependenciesNode(graph, nodeMap, hashMap, nodeStringId)
 }
 
@@ -270,8 +243,26 @@ func findLatestDependenciesOfAPackageBetweenTwoTimestamps(graph *g.DirectedGraph
 	beginTime := generateAndRunDatePrompt("Please input the beginning date of the interval (DD-MM-YYYY)")
 	endTime := generateAndRunDatePrompt("Please input the end date of the interval (DD-MM-YYYY)")
 	nodeStringId := generateAndRunPackageNamePrompt("Please select the name and the version of the package", nodeMap)
-	g.FilterGraph(graph, nodeMap, beginTime, endTime)
+	g.FilterNoTraversal(graph, nodeMap, beginTime, endTime)
 	return g.GetLatestTransitiveDependenciesNode(graph, nodeMap, hashMap, nodeStringId)
+}
+
+func findMostUsedPackagesUsingBetweenness(graph *g.DirectedGraph, idToNodeInfo map[int64]g.NodeInfo) {
+	fmt.Println("Running betweenness algorithm")
+	betweenness := g.Betweenness(graph)
+	keys := make([]int64, 0, len(betweenness))
+	for k := range betweenness {
+		keys = append(keys, k)
+	}
+
+	sort.SliceStable(keys, func(i, j int) bool {
+		return betweenness[keys[i]] > betweenness[keys[j]]
+	})
+
+	count := generateAndRunNumberPrompt("Please select the number (n > 0) of highest-ranked packages you wish to see")
+	for i := 0; i < count; i++ {
+		fmt.Printf("The %d-th highest-ranked node (%v) has a betweenness score of %f \n", i, idToNodeInfo[keys[i]], betweenness[keys[i]])
+	}
 }
 
 func generateAndRunNumberPrompt(message string) int {
@@ -287,7 +278,7 @@ func generateAndRunNumberPrompt(message string) int {
 	}
 
 	numberPrompt := &survey.Input{Message: message}
-	var number int = -1
+	var number = -1
 	err := survey.AskOne(numberPrompt, &number, survey.WithValidator(validateNumber))
 
 	if err != nil {
@@ -333,9 +324,9 @@ func generateAndRunDatePrompt(message string) time.Time {
 
 }
 
-func generateAndRunPackageNamePrompt(message string, stringIDToNodeInfo map[int64]g.NodeInfo) string {
-	names := make([]string, 0, len(stringIDToNodeInfo))
-	for _, node := range stringIDToNodeInfo {
+func generateAndRunPackageNamePrompt(message string, nodeMap map[int64]g.NodeInfo) string {
+	names := make([]string, 0, len(nodeMap))
+	for _, node := range nodeMap {
 		name := fmt.Sprintf("%s-%s", node.Name, node.Version)
 		names = append(names, name)
 	}
@@ -344,9 +335,6 @@ func generateAndRunPackageNamePrompt(message string, stringIDToNodeInfo map[int6
 		Options: names,
 	}
 
-	//packagePrompt := &survey.Input{
-	//	Message: message,
-	//}
 	packageID := ""
 	err := survey.AskOne(packagePrompt, &packageID)
 
