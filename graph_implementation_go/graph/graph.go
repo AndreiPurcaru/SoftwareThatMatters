@@ -335,6 +335,57 @@ func FilterNoTraversal(g *DirectedGraph, nodeMap map[int64]NodeInfo, beginTime, 
 	keepSelectedNodes(g, removeIDs)
 }
 
+func FilterLatestNoTraversal(g DirectedGraph, nodeMap map[int64]NodeInfo, hashMap map[uint64]int64, beginTime, endTime time.Time) {
+	length := g.Nodes().Len() / 2
+	newestPackageVersion := make(map[uint32]NodeInfo, length)
+	keepIDs := make(map[int64]struct{}, length)
+	removeIDs := make(map[int64]struct{}, length)
+	nodes := g.Nodes()
+
+	for nodes.Next() {
+		n := nodes.Node()
+		current := nodeMap[n.ID()]
+		currentDate, err := time.Parse(time.RFC3339, nodeMap[n.ID()].Timestamp)
+		if err != nil {
+			panic(err)
+		}
+		hash := hashPackageName(current.Name)
+
+		if latest, ok := newestPackageVersion[hash]; ok {
+			latestDate, err := time.Parse(time.RFC3339, latest.Timestamp)
+			if err != nil {
+				panic(err)
+			}
+			if currentDate.After(latestDate) { // If the key exists, and current date is later than the one stored
+				newestPackageVersion[hash] = current // Set to the current package
+			} else if currentDate.Equal(latestDate) { // If the dates are somehow equal, compare version numbers
+				currentVersion, _ := semver.NewVersion(current.Version)
+				latestVersion, _ := semver.NewVersion(latest.Version)
+
+				if currentVersion.GreaterThan(latestVersion) {
+					newestPackageVersion[hash] = current
+				}
+			}
+		} else { // If the key doesn't exist yet
+			newestPackageVersion[hash] = current
+		}
+
+	}
+
+	for _, v := range newestPackageVersion {
+		keepIDs[v.id] = struct{}{}
+	}
+
+	for id := range nodeMap {
+		if _, ok := keepIDs[id]; !ok { // If the node id was not on the list, kick it out
+			removeIDs[id] = struct{}{}
+		}
+	}
+
+	keepSelectedNodes(g, removeIDs)
+
+}
+
 // GetTransitiveDependenciesNode returns the specified node and its dependencies
 func GetTransitiveDependenciesNode(g *DirectedGraph, nodeMap map[int64]NodeInfo, hashMap map[uint64]int64, stringId string) *[]NodeInfo {
 	var nodeId int64
