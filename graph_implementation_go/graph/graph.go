@@ -53,34 +53,6 @@ func (nodeInfo NodeInfo) String() string {
 	return fmt.Sprintf("Package: %v - Version: %v", nodeInfo.Name, nodeInfo.Version)
 }
 
-// CreateStringIDToNodeInfoMap takes a list of PackageInfo and a DirectedGraph. For each of the packages,
-// it creates a mapping of stringIDs to NodeInfo and also adds a node to the graph. The handling of the IDs is delegated
-// to Gonum. These IDs are also included in the mapping for ease of access.
-func CreateStringIDToNodeInfoMap(packagesInfo *[]PackageInfo, graph *DirectedGraph) map[string]NodeInfo {
-	stringIDToNodeInfoMap := make(map[string]NodeInfo, len(*packagesInfo))
-	for _, packageInfo := range *packagesInfo {
-		for packageVersion, versionInfo := range packageInfo.Versions {
-			packageNameVersionString := fmt.Sprintf("%s-%s", packageInfo.Name, packageVersion)
-			// Delegate the work of creating a unique ID to Gonum
-			newNode := graph.NewNode()
-			newId := newNode.ID()
-			stringIDToNodeInfoMap[packageNameVersionString] = *NewNodeInfo(newId, packageInfo.Name, packageVersion, versionInfo.Timestamp)
-			graph.AddNode(newNode)
-		}
-	}
-	return stringIDToNodeInfoMap
-}
-
-// TODO: Maybe change to something like CreateIdToNodeInfoMap so it's not confusing for other people.
-
-func CreateNodeIdToPackageMap(m map[string]NodeInfo) map[int64]NodeInfo {
-	s := make(map[int64]NodeInfo, len(m))
-	for _, val := range m {
-		s[val.id] = val
-	}
-	return s
-}
-
 func CreateHashedVersionMap(pi *[]PackageInfo) map[uint32][]string {
 	result := make(map[uint32][]string, len(*pi))
 	for _, pkg := range *pi {
@@ -93,23 +65,12 @@ func CreateHashedVersionMap(pi *[]PackageInfo) map[uint32][]string {
 	return result
 }
 
-func CreateNameToVersionMap(m *[]PackageInfo) map[string][]string {
-	newMap := make(map[string][]string, len(*m))
-	for _, value := range *m {
-		name := value.Name
-		for k := range value.Versions {
-			newMap[name] = append(newMap[name], k)
-		}
-	}
-	return newMap
-}
-
 // CreateEdges takes a graph, a list of packages and their dependencies, a map of stringIDs to NodeInfo and
 // a map of names to versions and creates directed edges between the dependent library and its dependencies.
 func CreateEdges(graph *DirectedGraph, inputList *[]PackageInfo, hashToNodeId map[uint64]int64, hashToVersionMap map[uint32][]string, isMaven bool) {
 	packagesLength := len(*inputList)
 	edgesAmount := 0
-	channel := make(chan int, 2)
+	channel := make(chan int, 1000)
 	go func(n int, ch chan int) {
 		for {
 			for i := range ch {
@@ -321,35 +282,6 @@ func traverseAndRemoveEdges(g *DirectedGraph, nodeMap map[int64]NodeInfo, within
 
 }
 
-func traverseOneNode(g *DirectedGraph, nodeMap map[int64]NodeInfo, withinInterval map[int64]bool, nodeId int64) {
-	connected := make([]*graph.Edge, 0, len(nodeMap)*2)
-
-	t := traverse.BreadthFirst{
-		Traverse: func(e graph.Edge) bool { // The dependent / parent node
-			var traversal bool
-			fromId := e.From().ID()
-			toId := e.To().ID()
-			if withinInterval[toId] {
-				fromTime, err1 := time.Parse(time.RFC3339, nodeMap[fromId].Timestamp) // The dependent node's time stamp
-				toTime, err2 := time.Parse(time.RFC3339, nodeMap[toId].Timestamp)     // The dependency node's time stamp
-
-				if err1 != nil || err2 != nil {
-					panic(err1)
-				}
-
-				if traversal = fromTime.After(toTime); traversal {
-					connected = append(connected, &e)
-				} // If the dependency was released before the parent node, add this edge to the connected nodes
-			}
-
-			return traversal
-		},
-	}
-
-	_ = t.Walk(g, g.Node(nodeId), nil)
-	removeDisconnected(g, connected)
-}
-
 func filterGraph(g *DirectedGraph, nodeMap map[int64]NodeInfo, beginTime, endTime time.Time) {
 	// This stores whether the package existed in the specified time range
 	withinInterval := make(map[int64]bool, len(nodeMap))
@@ -401,23 +333,6 @@ func FilterNoTraversal(g *DirectedGraph, nodeMap map[int64]NodeInfo, beginTime, 
 	}
 
 	keepSelectedNodes(g, removeIDs)
-}
-
-func FilterNode(g *DirectedGraph, hashMap map[uint64]int64, nodeMap map[int64]NodeInfo, stringId string, beginTime, endTime time.Time) {
-
-	var nodeId int64
-	if id, ok := findNode(hashMap, nodeMap, stringId); ok {
-		nodeId = id
-	} else {
-		return // This function is a no-op if we don't have a correct string id
-	}
-
-	// This stores whether the package existed in the specified time range
-	withinInterval := make(map[int64]bool, len(nodeMap))
-
-	initializeTraversal(g, nodeMap, withinInterval, beginTime, endTime) // Initialize all auxillary data structures for the traversal
-
-	traverseOneNode(g, nodeMap, withinInterval, nodeId)
 }
 
 // GetTransitiveDependenciesNode returns the specified node and its dependencies
@@ -512,64 +427,6 @@ func keepSelectedNodes(g *DirectedGraph, removeIDs map[int64]struct{}) {
 	for id := range removeIDs {
 		g.RemoveNode(id)
 	}
-}
-
-// FilterLatestDepsGraph filters the graph between the two given time stamps and then only keep the latest dependencies
-func FilterLatestDepsGraph(g *DirectedGraph, nodeMap map[int64]NodeInfo, hashMap map[uint64]int64, beginTime, endTime time.Time) {
-	filterGraph(g, nodeMap, beginTime, endTime)
-	length := g.Nodes().Len() / 2
-
-	keepIDs := make(map[int64]struct{}, length)
-	removeIDs := make(map[int64]struct{}, length)
-	newestPackageVersion := make(map[uint32]NodeInfo, length)
-	v := traverse.DepthFirst{
-		Visit: func(n graph.Node) {
-			current := nodeMap[n.ID()]
-			currentDate, _ := time.Parse(time.RFC3339, current.Timestamp)
-			hash := hashPackageName(current.Name)
-
-			if latest, ok := newestPackageVersion[hash]; ok {
-				latestDate, _ := time.Parse(time.RFC3339, latest.Timestamp)
-				if currentDate.After(latestDate) { // If the key exists, and current date is later than the one stored
-					newestPackageVersion[hash] = current // Set to the current package
-				} else if currentDate.Equal(latestDate) { // If the dates are somehow equal, compare version numbers
-					currentversion, _ := semver.NewVersion(current.Version)
-					latestVersion, _ := semver.NewVersion(latest.Version)
-
-					if currentversion.GreaterThan(latestVersion) {
-						newestPackageVersion[hash] = current
-					}
-				}
-			} else { // If the key doesn't exist yet
-				newestPackageVersion[hash] = current
-			}
-		},
-	}
-	nodesAmount := len(hashMap)
-	nodes := g.Nodes()
-
-	i := 0
-	for nodes.Next() {
-		n := nodes.Node()
-		_ = v.Walk(g, n, nil)
-		v.Reset()
-		i++
-		fmt.Printf("\u001b[1A \u001b[2K \r") // Clear the last line
-		fmt.Printf("%d / %d subtrees walked \n", i, nodesAmount)
-	}
-
-	for _, v := range newestPackageVersion {
-		keepIDs[v.id] = struct{}{}
-	}
-
-	for id := range nodeMap {
-		if _, ok := keepIDs[id]; !ok { // If the node id was not on the list, kick it out
-			removeIDs[id] = struct{}{}
-		}
-	}
-
-	keepSelectedNodes(g, removeIDs)
-
 }
 
 // PageRank uses the sparse page rank algorithm to find the Page ranks of all nodes

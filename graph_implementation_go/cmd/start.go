@@ -62,7 +62,6 @@ func start() {
 
 	graph, hashMap, idToNodeInfo := g.CreateGraph(path, isUsingMaven)
 
-	//"View the graph", "View the packages list", "View the packages list with versions", "View the packages list with versions and dependencies"
 	stop := false
 	for !stop {
 		operationIndex := 0
