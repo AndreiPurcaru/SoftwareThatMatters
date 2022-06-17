@@ -335,7 +335,7 @@ func FilterNoTraversal(g *DirectedGraph, nodeMap map[int64]NodeInfo, beginTime, 
 	keepSelectedNodes(g, removeIDs)
 }
 
-func FilterLatestNoTraversal(g DirectedGraph, nodeMap map[int64]NodeInfo, hashMap map[uint64]int64, beginTime, endTime time.Time) {
+func FilterLatestNoTraversal(g *DirectedGraph, nodeMap map[int64]NodeInfo) {
 	length := g.Nodes().Len() / 2
 	newestPackageVersion := make(map[uint32]NodeInfo, length)
 	keepIDs := make(map[int64]struct{}, length)
