@@ -116,39 +116,11 @@ func start() {
 				fmt.Println(node)
 			}
 		case 5:
-			fmt.Println("Running PagerRank")
-			pr := g.PageRank(graph)
-			keys := make([]int64, 0, len(pr))
-			for k := range pr {
-				keys = append(keys, k)
-			}
-
-			sort.SliceStable(keys, func(i, j int) bool {
-				return pr[keys[i]] > pr[keys[j]]
-			})
-
-			count := generateAndRunNumberPrompt("Please select the number (n > 0) of highest-ranked packages you wish to see")
-			for i := 0; i < count; i++ {
-				fmt.Printf("The %d-th highest-ranked node (%v) has rank %f \n", i, idToNodeInfo[keys[i]], pr[keys[i]])
-			}
+			findMostUsedPackages(graph, idToNodeInfo, false)
 		case 6:
-			findMostUsedPackagesBetweenTimestamps(graph, idToNodeInfo)
+			findMostUsedPackages(graph, idToNodeInfo, true)
 		case 7:
-			fmt.Println("Running betweenness algorithm")
-			betweenness := g.Betweenness(graph)
-			keys := make([]int64, 0, len(betweenness))
-			for k := range betweenness {
-				keys = append(keys, k)
-			}
-
-			sort.SliceStable(keys, func(i, j int) bool {
-				return betweenness[keys[i]] > betweenness[keys[j]]
-			})
-
-			count := generateAndRunNumberPrompt("Please select the number (n > 0) of highest-ranked packages you wish to see")
-			for i := 0; i < count; i++ {
-				fmt.Printf("The %d-th highest-ranked node (%v) has a betweenness score of %f \n", i, idToNodeInfo[keys[i]], betweenness[keys[i]])
-			}
+			findMostUsedPackagesUsingBetweenness(graph, idToNodeInfo)
 		case 8:
 			fmt.Println("Stopping the program...")
 			stop = true
@@ -158,14 +130,17 @@ func start() {
 
 }
 
-func findMostUsedPackagesBetweenTimestamps(graph *g.DirectedGraph, idToNodeInfo map[int64]g.NodeInfo) {
-	beginTime := generateAndRunDatePrompt("Please input the beginning date of the interval (DD-MM-YYYY)")
-	endTime := generateAndRunDatePrompt("Please input the end date of the interval (DD-MM-YYYY)")
-	fmt.Println("Getting the latest dependencies for packages. This will take a while")
-	t1 := time.Now().Unix()
-	g.FilterNoTraversal(graph, idToNodeInfo, beginTime, endTime)
-	t2 := time.Now().Unix()
-	fmt.Printf("Graph filtering took %d seconds\n", t2-t1)
+func findMostUsedPackages(graph *g.DirectedGraph, idToNodeInfo map[int64]g.NodeInfo, betweenTimestamps bool) {
+	if betweenTimestamps {
+		beginTime := generateAndRunDatePrompt("Please input the beginning date of the interval (DD-MM-YYYY)")
+		endTime := generateAndRunDatePrompt("Please input the end date of the interval (DD-MM-YYYY)")
+		fmt.Println("Getting the latest dependencies for packages. This will take a while")
+		t1 := time.Now().Unix()
+		g.FilterNoTraversal(graph, idToNodeInfo, beginTime, endTime)
+		t2 := time.Now().Unix()
+		fmt.Printf("Graph filtering took %d seconds\n", t2-t1)
+	}
+
 	fmt.Println("Running PageRank")
 	pr := g.PageRank(graph)
 	keys := make([]int64, 0, len(pr))
@@ -270,6 +245,24 @@ func findLatestDependenciesOfAPackageBetweenTwoTimestamps(graph *g.DirectedGraph
 	nodeStringId := generateAndRunPackageNamePrompt("Please select the name and the version of the package", nodeMap)
 	g.FilterNoTraversal(graph, nodeMap, beginTime, endTime)
 	return g.GetLatestTransitiveDependenciesNode(graph, nodeMap, hashMap, nodeStringId)
+}
+
+func findMostUsedPackagesUsingBetweenness(graph *g.DirectedGraph, idToNodeInfo map[int64]g.NodeInfo) {
+	fmt.Println("Running betweenness algorithm")
+	betweenness := g.Betweenness(graph)
+	keys := make([]int64, 0, len(betweenness))
+	for k := range betweenness {
+		keys = append(keys, k)
+	}
+
+	sort.SliceStable(keys, func(i, j int) bool {
+		return betweenness[keys[i]] > betweenness[keys[j]]
+	})
+
+	count := generateAndRunNumberPrompt("Please select the number (n > 0) of highest-ranked packages you wish to see")
+	for i := 0; i < count; i++ {
+		fmt.Printf("The %d-th highest-ranked node (%v) has a betweenness score of %f \n", i, idToNodeInfo[keys[i]], betweenness[keys[i]])
+	}
 }
 
 func generateAndRunNumberPrompt(message string) int {

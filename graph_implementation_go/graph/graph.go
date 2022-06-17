@@ -44,6 +44,44 @@ func (nodeInfo NodeInfo) String() string {
 	return fmt.Sprintf("Package: %v - Version: %v", nodeInfo.Name, nodeInfo.Version)
 }
 
+func CreateGraph(inputPath string, isUsingMaven bool) (*DirectedGraph, map[uint64]int64, map[int64]NodeInfo) {
+	fmt.Println("Parsing input")
+	packagesList := ParseJSON(inputPath)
+
+	directedGraph := NewDirectedGraph()
+
+	fmt.Println("Adding nodes and creating indices")
+
+	hashToNodeId, idToNodeInfo := CreateMaps(&packagesList, directedGraph)
+	hashToVersions := CreateHashedVersionMap(&packagesList)
+
+	fmt.Println("Creating edges")
+
+	CreateEdges(directedGraph, &packagesList, hashToNodeId, hashToVersions, isUsingMaven)
+
+	fmt.Println("Done creating edges!")
+
+	return directedGraph, hashToNodeId, idToNodeInfo
+}
+
+func CreateMaps(packageList *[]PackageInfo, graph *DirectedGraph) (map[uint64]int64, map[int64]NodeInfo) {
+	hashToNodeId := make(map[uint64]int64, len(*packageList)*10)
+	idToNodeInfo := make(map[int64]NodeInfo, len(*packageList)*10)
+	for _, packageInfo := range *packageList {
+		for packageVersion, versionInfo := range packageInfo.Versions {
+			stringID := fmt.Sprintf("%s-%s", packageInfo.Name, packageVersion)
+			hashed := hashStringId(stringID)
+			// Delegate the work of creating a unique ID to Gonum
+			newNode := graph.NewNode()
+			newId := newNode.ID()
+			hashToNodeId[hashed] = newId
+			idToNodeInfo[newId] = *NewNodeInfo(newId, packageInfo.Name, packageVersion, versionInfo.Timestamp)
+			graph.AddNode(newNode)
+		}
+	}
+	return hashToNodeId, idToNodeInfo
+}
+
 // CreateEdges takes a graph, a list of packages and their dependencies, a map of stringIDs to NodeInfo and
 // a map of names to versions and creates directed edges between the dependent library and its dependencies.
 func CreateEdges(graph *DirectedGraph, inputList *[]PackageInfo, hashToNodeId map[uint64]int64, hashToVersionMap map[uint32][]string, isMaven bool) {
@@ -122,42 +160,4 @@ func ParseJSON(inPath string) []PackageInfo {
 	fmt.Printf("Read %d packages\n", len(result.Pkgs))
 
 	return result.Pkgs
-}
-
-func CreateMaps(packageList *[]PackageInfo, graph *DirectedGraph) (map[uint64]int64, map[int64]NodeInfo) {
-	hashToNodeId := make(map[uint64]int64, len(*packageList)*10)
-	idToNodeInfo := make(map[int64]NodeInfo, len(*packageList)*10)
-	for _, packageInfo := range *packageList {
-		for packageVersion, versionInfo := range packageInfo.Versions {
-			stringID := fmt.Sprintf("%s-%s", packageInfo.Name, packageVersion)
-			hashed := hashStringId(stringID)
-			// Delegate the work of creating a unique ID to Gonum
-			newNode := graph.NewNode()
-			newId := newNode.ID()
-			hashToNodeId[hashed] = newId
-			idToNodeInfo[newId] = *NewNodeInfo(newId, packageInfo.Name, packageVersion, versionInfo.Timestamp)
-			graph.AddNode(newNode)
-		}
-	}
-	return hashToNodeId, idToNodeInfo
-}
-
-func CreateGraph(inputPath string, isUsingMaven bool) (*DirectedGraph, map[uint64]int64, map[int64]NodeInfo) {
-	fmt.Println("Parsing input")
-	packagesList := ParseJSON(inputPath)
-
-	directedGraph := NewDirectedGraph()
-
-	fmt.Println("Adding nodes and creating indices")
-
-	hashToNodeId, idToNodeInfo := CreateMaps(&packagesList, directedGraph)
-	hashToVersions := CreateHashedVersionMap(&packagesList)
-
-	fmt.Println("Creating edges")
-
-	CreateEdges(directedGraph, &packagesList, hashToNodeId, hashToVersions, isUsingMaven)
-
-	fmt.Println("Done creating edges!")
-
-	return directedGraph, hashToNodeId, idToNodeInfo
 }
