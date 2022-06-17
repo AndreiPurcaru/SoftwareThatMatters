@@ -1,9 +1,10 @@
 // Copyright ©2014 The Gonum Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// license that can be found in the third_party_licenses/Gonum-LICENSE file.
 
 // This code was modified by Andrei Purcaru in order to better suit the needs of this repository. The changes include
-// the removal of the "to" map from the graph data structure and changing from int64 to int32 to save memory.
+// the removal of the "to" map from the graph data structure and the change of a method that was using it into a method
+// that panics instantly when called.
 
 package graph
 
